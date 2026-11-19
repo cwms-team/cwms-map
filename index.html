@@ -110,6 +110,7 @@ textarea{width:100%;min-height:70px;border:1px solid var(--line);border-radius:8
   </form>
   <div class="note" id="addrMsg" style="display:none"></div>
   <div class="row">
+    <select id="cty" class="btn" aria-label="縣市整批列出"><option value="">依中心點距離列出</option><option>臺中市</option><option>彰化縣</option><option>雲林縣</option><option>南投縣</option><option value="*">四縣市全部</option></select>
     <select id="town" class="btn" aria-label="以鄉鎮為中心"></select>
   </div>
   <div class="row">
@@ -154,13 +155,13 @@ textarea{width:100%;min-height:70px;border:1px solid var(--line);border-radius:8
 <script>
 const TIER=['明確應設','需認定','潛在（同業別）','永久停工'];
 const SRC={'應設未設總表':'應設未設總表','115年裁罰':'115年裁罰','臨轉特':'臨轉特','同業別':'同業別'};
-let D=[], center=null, sel=new Set(), tiers=new Set([0,1]);
+let D=[], LIM=300, center=null, sel=new Set(), tiers=new Set([0,1]);
 const $=id=>document.getElementById(id);
 const store={get(k,d){try{const v=localStorage.getItem('cwms_'+k);return v?JSON.parse(v):d}catch(e){return d}},set(k,v){try{localStorage.setItem('cwms_'+k,JSON.stringify(v))}catch(e){}}};
 function km(a,b,c,d){const R=6371,r=Math.PI/180,x=(c-a)*r,y=(d-b)*r;const h=Math.sin(x/2)**2+Math.cos(a*r)*Math.cos(c*r)*Math.sin(y/2)**2;return 2*R*Math.asin(Math.sqrt(h))}
 function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 function key(r){return r.c+'|'+(r.id||r.n)}
-function setCenter(lat,lng,name,prec){center={lat,lng,name,prec:prec||''};$('centerName').textContent=name;$('centerPrec').textContent=prec||'';store.set('center',center);render()}
+function setCenter(lat,lng,name,prec,keep){if(!keep&&$('cty').value){$('cty').value='';store.set('cty','');syncCty()}center={lat,lng,name,prec:prec||''};$('centerName').textContent=name;$('centerPrec').textContent=prec||'';store.set('center',center);render()}
 
 Promise.resolve(window.__DATA).then(rows=>{
   D=rows.map(a=>({c:a[0],id:a[1],n:a[2],t:a[3],i:a[4],tier:a[5],src:a[6],pts:a[7],emi:a[8],st:a[9],a:a[10],x:a[11],pen:a[12],la:a[13],lo:a[14],ap:a[15]||0,ph:a[16]||'',pn:a[17]||''}));
@@ -172,22 +173,25 @@ Promise.resolve(window.__DATA).then(rows=>{
   sel=new Set(store.get('sel',[]));
   const tz=store.get('tiers',null); if(tz) tiers=new Set(tz);
   document.querySelectorAll('#tiers .chip').forEach(b=>b.setAttribute('aria-pressed',tiers.has(+b.dataset.t)));
+  $('cty').value=store.get('cty','');syncCty();
   const rv=store.get('rad',5); $('rad').value=rv; $('radv').textContent=rv+' km';
   const c=store.get('center',null);
-  if(c) setCenter(c.lat,c.lng,c.name,c.prec); else setCenter(24.2531,120.7189,'臺中市豐原區（預設）');
+  if(c) setCenter(c.lat,c.lng,c.name,c.prec,1); else setCenter(24.2531,120.7189,'臺中市豐原區（預設）',null,1);
 }).catch(()=>{$('list').innerHTML='<div class="empty">資料載入失敗，請重新整理頁面。</div>'});
 
 function filtered(){
-  const R=+$('rad').value, q=$('q').value.trim();
+  const R=+$('rad').value, q=$('q').value.trim(), C=$('cty').value;
   let out=[];
   for(const r of D){
     if(!tiers.has(r.tier)) continue;
+    if(C && C!=='*' && r.c!==C) continue;
     if(q && !(r.n+r.i+r.a+r.t+r.c+r.ph).includes(q)) continue;
     r.d = (r.la && center)? km(center.lat,center.lng,r.la,r.lo) : null;
-    if(!q){ if(r.d===null || r.d>R) continue; }
+    if(!q && !C){ if(r.d===null || r.d>R) continue; }
     out.push(r);
   }
-  out.sort((a,b)=>(a.d??1e9)-(b.d??1e9)||a.tier-b.tier);
+  if(C) out.sort((a,b)=>a.tier-b.tier||a.c.localeCompare(b.c,'zh-Hant')||a.t.localeCompare(b.t,'zh-Hant')||a.n.localeCompare(b.n,'zh-Hant'));
+  else out.sort((a,b)=>(a.d??1e9)-(b.d??1e9)||a.tier-b.tier);
   return out;
 }
 function navUrl(r){return (r.la&&!r.ap)?`https://www.google.com/maps/dir/?api=1&destination=${r.la},${r.lo}`:`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(r.a||r.n)}`}
@@ -219,9 +223,10 @@ function render(){
   const rows=filtered(); LAST=rows;
   const cnt=[0,0,0,0]; rows.forEach(r=>cnt[r.tier]++);
   const q=$('q').value.trim();
-  $('stat').textContent = (q?`搜尋「${q}」（不限距離）`:`${center?center.name:''} 方圓 ${$('rad').value} km`)+`：共 ${rows.length} 間（明確 ${cnt[0]}、需認定 ${cnt[1]}、潛在 ${cnt[2]}、停工 ${cnt[3]}）`;
-  const show=rows.slice(0,150);
-  $('list').innerHTML = show.length? show.map(card).join('') + (rows.length>150?`<div class="empty">只顯示最近的 150 間，請縮小範圍或用搜尋。</div>`:'') : `<div class="empty">範圍內沒有符合的業者。可加大方圓距離、打開「潛在（同業別）」，或換一個中心點。</div>`;
+  const C=$('cty').value, cn=C==='*'?'四縣市全部':C;
+  $('stat').textContent = (C?`${cn}${q?`搜尋「${q}」`:''}（依優先度、鄉鎮排序，不限距離）`:q?`搜尋「${q}」（不限距離）`:`${center?center.name:''} 方圓 ${$('rad').value} km`)+`：共 ${rows.length} 間（明確 ${cnt[0]}、需認定 ${cnt[1]}、潛在 ${cnt[2]}、停工 ${cnt[3]}）`;
+  const lim=C?LIM:150, show=rows.slice(0,lim);
+  $('list').innerHTML = show.length? show.map(card).join('') + (rows.length>lim?(C?`<div class="empty">已顯示 ${lim} / ${rows.length} 間 <button class="btn" type="button" id="btnMore">再顯示 300 間</button></div>`:`<div class="empty">只顯示最近的 150 間，請縮小範圍或用搜尋。</div>`):'') : `<div class="empty">範圍內沒有符合的業者。可加大方圓距離、打開「潛在（同業別）」，或換一個中心點。</div>`;
   $('selN').textContent=sel.size;
 }
 $('list').addEventListener('change',e=>{const k=e.target.dataset.k;if(!k)return;e.target.checked?sel.add(k):sel.delete(k);store.set('sel',[...sel]);e.target.closest('.card').classList.toggle('sel',e.target.checked);$('selN').textContent=sel.size});
@@ -229,6 +234,9 @@ $('list').addEventListener('click',async e=>{const ph=e.target.dataset.ph;if(ph)
 $('rad').addEventListener('input',e=>{$('radv').textContent=e.target.value+' km';store.set('rad',+e.target.value);render()});
 $('q').addEventListener('input',render);
 document.querySelectorAll('#tiers .chip').forEach(b=>b.addEventListener('click',()=>{const t=+b.dataset.t;tiers.has(t)?tiers.delete(t):tiers.add(t);b.setAttribute('aria-pressed',tiers.has(t));store.set('tiers',[...tiers]);render()}));
+function syncCty(){const on=!!$('cty').value;document.querySelector('.range').style.opacity=on?.4:1;$('rad').disabled=on}
+$('cty').addEventListener('change',e=>{store.set('cty',e.target.value);LIM=300;syncCty();render();window.scrollTo({top:0})});
+$('list').addEventListener('click',e=>{if(e.target.id==='btnMore'){LIM+=300;render()}});
 $('town').addEventListener('change',e=>{const v=e.target.value;if(v){const p=TOWN[v];setCenter(p[0],p[1],v+'（鄉鎮中心）')}});
 
 let G=null; Promise.resolve(window.__GEO).then(g=>G=g).catch(()=>{});
